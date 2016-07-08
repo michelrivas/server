@@ -1,0 +1,22 @@
+name: server
+version: 0.0.1
+cabal-version: >= 1.10
+build-type: Simple
+license: BSD3
+license-file: LICENSE
+maintainer: m@m.com
+synopsis: server
+description:
+          
+author: Michel
+
+executable server
+    main-is: Main.hs
+    build-depends:
+        QuickCheck -any,
+        base -any,
+        network -any
+    default-language: Haskell2010
+    hs-source-dirs: .
+    ghc-options: -O3 -threaded -with-rtsopts=-N
+
