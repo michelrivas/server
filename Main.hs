@@ -29,59 +29,119 @@ import System.IO (hSetBuffering, hGetLine, hPutStrLn, hClose, BufferMode(..), Ha
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
 import Control.Monad
+import Control.Exception
+import Data.GUID
 
 type ServerID = String
 
 data Server = Server {
     serverID :: ServerID,
     serverHandle :: Handle,
-    host :: String,
-    port :: PortNumber
+    hostName :: String,
+    portNumber :: PortNumber
 }
 
-data State = State {
+data ServerState = ServerState {
+    localID :: ServerID,
     proposalNumber :: Int,
+    localPort :: PortNumber,
     serverList :: [Server]
 }
+
+newGUID :: IO String
+newGUID = genString
 
 main :: IO ()
 main = withSocketsDo $ do
     args <- getArgs
+    id <- newGUID
     let port = fromIntegral (read $ head args :: Int)
     socket <- listenOn $ PortNumber port
     putStrLn $ "Listening on " ++ (head args)
-    let state = State {proposalNumber = 1, serverList = []}
-    cfg <- newMVar state
-    forever $ accept socket >>= forkIO . (handleClientConnection socket cfg)
+    putStrLn $ "ServerID: " ++ id
+    let state = ServerState {localID = id, proposalNumber = 1, localPort = port, serverList = []}
+    config <- newMVar state
+    forkIO $ connectServers config (tail args)
+    forkIO $ mainProcess config
+    forever $ accept socket >>= forkIO . (handleClientConnection config)
 
-handleClientConnection socket cfg (handle, host, portno) = do
+handleClientConnection config (handle, host, portno) = do
     putStrLn "Client connected"
-    state <- takeMVar cfg
-    let servers = serverList state
     id <- hGetLine handle
     putStrLn $ "ID: " ++ id
-    let server = Server {serverID = id, serverHandle = handle, host = host, port = portno}
-    let newState = state { serverList = server : servers}
-    putMVar cfg newState
-    handleClientRequest socket cfg server
+    sendID config handle
+    let server = Server {serverID = id, serverHandle = handle, hostName = host, portNumber = portno}
+    saveServer config server
+    handleClientRequest config server
 
-handleClientRequest socket cfg server = do
-    let handle = serverHandle server
-    msg <- hGetLine handle
-    state <- takeMVar cfg
+handleClientRequest config server = do
+    msg <- hGetLine $ serverHandle server
+    state <- takeMVar config
     let proposal = proposalNumber state
     let line = (serverID server) ++ " says: " ++ msg
+    putStrLn line
     let servers = serverList state
-    broadcast line (serverID server) servers
+--    broadcast line (serverID server) servers
     let newState = state { proposalNumber = proposal + 1}
-    putMVar cfg newState
-    handleClientRequest socket cfg server
+    putMVar config newState
+    handleClientRequest config server
 
-send msg s = do
-    hPutStrLn (serverHandle s) msg
-    putStrLn msg
+saveServer config server = do
+    state <- takeMVar config
+    let servers = serverList state
+    let newState = state { serverList = server : servers}
+    putMVar config newState
+    putStrLn $ "Servers: " ++ show (1 + length servers)
+
+send msg handle = do
+    hPutStrLn handle msg
+--    putStrLn $ "Sent: " ++ msg
 
 broadcast _ _ [] = return ()
-broadcast msg origin (s : servers) = do
-    when (serverID s /= origin) $ send msg s
+broadcast msg origin (server : servers) = do
+    when (serverID server /= origin) $ send msg (serverHandle server)
     broadcast msg origin servers
+
+connectServers _ [] = return ()
+connectServers config (portno : ports) = do
+    forkIO $ connectServer config "localhost" portno
+    connectServers config ports
+
+connectServer config host portno = do
+    let port = fromIntegral (read portno :: Int)
+    putStrLn $ "Connecting to " ++ host ++ ":" ++ portno
+    result <- testAddress host (PortNumber port)
+    case result of
+        Just handle -> do
+            id <- handShake config handle
+            let server = Server {serverID = id, serverHandle = handle, hostName = host, portNumber = port}
+            saveServer config server
+            putStrLn $ "Connected to " ++ host ++ ":" ++ portno
+            handleClientRequest config server
+        Nothing -> do
+            putStrLn "Error connecting"
+            threadDelay 5000000
+            connectServer config host portno
+
+testAddress host port = do
+    result <- try $ connectTo host port
+    case result of
+        Left (SomeException e) -> return Nothing
+        Right h -> return $ Just h
+
+sendID config handle = do
+    state <- takeMVar config
+    send (localID state) handle
+    putMVar config state
+
+handShake config handle = do
+    sendID config handle
+    hGetLine handle
+
+mainProcess config = do
+    line <- getLine
+    state <- takeMVar config
+    let servers = serverList state
+    putMVar config state
+    broadcast line "" servers
+    mainProcess config
