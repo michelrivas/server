@@ -10,13 +10,14 @@ description:
           
 author: Michel
 
-executable server8
+executable server1
     main-is: Main.hs
     build-depends:
         QuickCheck -any,
         base -any,
         network -any,
-        guid -any
+        guid -any,
+        split -any
     default-language: Haskell2010
     hs-source-dirs: .
     ghc-options: -O3 -threaded -with-rtsopts=-N
